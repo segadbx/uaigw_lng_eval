@@ -1,0 +1,86 @@
+# Unity Gateway model services (Beta in bundles; direct engine).
+# Field names follow `databricks bundle schema` (resources.ModelService) and the
+# bundle example on docs.databricks.com/aws/en/ai-gateway/model-services.
+#
+# Definer's privileges: a call is authorised against the service OWNER's access to
+# the destination, so callers only need EXECUTE on the service. The owner is whoever
+# deploys the bundle; deploy the `demo` target as the owner SP (docs/README.md).
+#
+# Service policies (SDD, SQL deny, LLM judge) are NOT bundle-configurable during the
+# Beta. They are attached in the UI: see docs/MANUAL_STEPS.md.
+
+resources:
+  model_services:
+    trading_copilot:
+      parent: schemas/${var.catalog}.${resources.schemas.services.name}
+      model_service_id: trading_copilot
+      comment: Prod-like trading-desk copilot. EXECUTE only for the trader pilot group and the app SP.
+      config:
+        routing:
+          destinations:
+            - name: primary
+              destination_type: DESTINATION_TYPE_PAY_PER_TOKEN_FOUNDATION_MODEL
+              pay_per_token_config:
+                model: models/system.ai.${var.chat_model}
+              traffic_percentage: 100
+        inference_table:
+          parent: schemas/${var.catalog}.${resources.schemas.audit_raw.name}
+          table_name_prefix: trading_copilot # gateway appends _payload
+        rate_limits:
+          - key: RATE_LIMIT_KEY_USER_DEFAULT
+            renewal_period: RATE_LIMIT_RENEWAL_PERIOD_MINUTE
+            requests: 30
+          - key: RATE_LIMIT_KEY_SERVICE
+            renewal_period: RATE_LIMIT_RENEWAL_PERIOD_MINUTE
+            tokens: 200000
+      grants:
+        - principal: ${var.trader_group}
+          privileges: [EXECUTE]
+        - principal: ${var.app_sp_application_id}
+          privileges: [EXECUTE]
+        - principal: ${var.security_group}
+          privileges: [MANAGE] # attach / detach service policies; no EXECUTE
+
+    trading_copilot_dev:
+      parent: schemas/${var.catalog}.${resources.schemas.services.name}
+      model_service_id: trading_copilot_dev
+      comment: Developer sandbox service. Used for the fail-closed (broken policy) demo.
+      config:
+        routing:
+          destinations:
+            - name: primary
+              destination_type: DESTINATION_TYPE_PAY_PER_TOKEN_FOUNDATION_MODEL
+              pay_per_token_config:
+                model: models/system.ai.${var.dev_chat_model}
+              traffic_percentage: 100
+        inference_table:
+          parent: schemas/${var.catalog}.${resources.schemas.audit_raw.name}
+          table_name_prefix: trading_copilot_dev
+        rate_limits:
+          - key: RATE_LIMIT_KEY_USER_DEFAULT
+            renewal_period: RATE_LIMIT_RENEWAL_PERIOD_MINUTE
+            requests: 20
+      grants:
+        - principal: ${var.developer_group}
+          privileges: [EXECUTE, MANAGE]
+        - principal: ${var.security_group}
+          privileges: [MANAGE]
+
+    trading_judge:
+      parent: schemas/${var.catalog}.${resources.schemas.services.name}
+      model_service_id: trading_judge
+      comment: Evaluator for the LLM-as-a-judge policy. Its inference table holds the judged content and verdicts (M5).
+      config:
+        routing:
+          destinations:
+            - name: primary
+              destination_type: DESTINATION_TYPE_PAY_PER_TOKEN_FOUNDATION_MODEL
+              pay_per_token_config:
+                model: models/system.ai.${var.judge_model}
+              traffic_percentage: 100
+        inference_table:
+          parent: schemas/${var.catalog}.${resources.schemas.audit_raw.name}
+          table_name_prefix: trading_judge
+      grants:
+        - principal: ${var.security_group}
+          privileges: [EXECUTE] # required to select it as evaluator when attaching a judge policy

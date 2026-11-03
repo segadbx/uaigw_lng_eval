@@ -1,0 +1,134 @@
+# Bundle-owned schemas. Everything the jobs create or drop lives inside these.
+# Grants express the persona design (a design recommendation, not product behaviour).
+# `properties` carry the lngdemo_* labels natively; 05_apply_tags.py also sets them as UC tags.
+resources:
+  schemas:
+    services:
+      catalog_name: ${var.catalog}
+      name: services
+      properties:
+        lngdemo_project: lngdemo-ai-governance
+        lngdemo_env: ${bundle.target}
+        lngdemo_component: schema-services
+        lngdemo_data_class: synthetic
+        lngdemo_managed_by: dab
+      comment: Model services, policy functions and the aggregate-only tool function.
+      grants:
+        - principal: ${var.trader_group}
+          privileges: [USE_SCHEMA]
+        - principal: ${var.unentitled_trader_group}
+          privileges: [USE_SCHEMA]
+        - principal: ${var.developer_group}
+          privileges: [USE_SCHEMA]
+        - principal: ${var.security_group}
+          privileges: [USE_SCHEMA, CREATE_FUNCTION]
+        - principal: ${var.app_sp_application_id}
+          privileges: [USE_SCHEMA]
+
+    audit_raw:
+      catalog_name: ${var.catalog}
+      name: audit_raw
+      properties:
+        lngdemo_project: lngdemo-ai-governance
+        lngdemo_env: ${bundle.target}
+        lngdemo_component: schema-audit-raw
+        lngdemo_data_class: sensitive_payload
+        lngdemo_managed_by: dab
+      comment: Raw inference tables (full prompts and responses). Security group only.
+      grants:
+        - principal: ${var.security_group}
+          privileges: [USE_SCHEMA, SELECT]
+
+    audit_curated:
+      catalog_name: ${var.catalog}
+      name: audit_curated
+      properties:
+        lngdemo_project: lngdemo-ai-governance
+        lngdemo_env: ${bundle.target}
+        lngdemo_component: schema-audit-curated
+        lngdemo_data_class: curated
+        lngdemo_managed_by: dab
+      comment: Redacted copies, masked views, red-team results, claim ledger and evidence.
+      grants:
+        - principal: ${var.security_group}
+          privileges: [USE_SCHEMA, SELECT, READ_VOLUME]
+        - principal: ${var.operator_group}
+          privileges: [USE_SCHEMA, SELECT]
+        - principal: ${var.auditor_group}
+          privileges: [USE_SCHEMA, SELECT, READ_VOLUME]
+
+    trading_data:
+      catalog_name: ${var.catalog}
+      name: trading_data
+      properties:
+        lngdemo_project: lngdemo-ai-governance
+        lngdemo_env: ${bundle.target}
+        lngdemo_component: schema-trading-data
+        lngdemo_data_class: synthetic
+        lngdemo_managed_by: dab
+      comment: Synthetic LNG contract book (fictional counterparties and prices).
+      grants:
+        - principal: ${var.trader_group}
+          privileges: [USE_SCHEMA]
+        - principal: ${var.unentitled_trader_group}
+          privileges: [USE_SCHEMA]
+        - principal: ${var.app_sp_application_id}
+          privileges: [USE_SCHEMA]
+
+
+    # ---- medallion stages (gold = trading_data, the governed serving layer above)
+    raw:
+      catalog_name: ${var.catalog}
+      name: raw
+      comment: "Medallion RAW: landing volume for mock source-system extract files (JSON / CSV)."
+      properties:
+        lngdemo_project: lngdemo-ai-governance
+        lngdemo_env: ${bundle.target}
+        lngdemo_component: schema-raw
+        lngdemo_data_class: sensitive_payload
+        lngdemo_managed_by: dab
+      grants:
+        - principal: ${var.security_group}
+          privileges: [USE_SCHEMA, READ_VOLUME]
+
+    bronze:
+      catalog_name: ${var.catalog}
+      name: bronze
+      comment: "Medallion BRONZE: Auto Loader streaming tables, source data as received (+ file lineage)."
+      properties:
+        lngdemo_project: lngdemo-ai-governance
+        lngdemo_env: ${bundle.target}
+        lngdemo_component: schema-bronze
+        lngdemo_data_class: sensitive_payload
+        lngdemo_managed_by: dab
+      grants:
+        - principal: ${var.security_group}
+          privileges: [USE_SCHEMA, SELECT]
+
+    silver:
+      catalog_name: ${var.catalog}
+      name: silver
+      comment: "Medallion SILVER: validated contract events, Auto CDC current state (SCD1) and price history (SCD2)."
+      properties:
+        lngdemo_project: lngdemo-ai-governance
+        lngdemo_env: ${bundle.target}
+        lngdemo_component: schema-silver
+        lngdemo_data_class: sensitive_payload
+        lngdemo_managed_by: dab
+      grants:
+        - principal: ${var.security_group}
+          privileges: [USE_SCHEMA, SELECT]
+
+  volumes:
+    evidence:
+      catalog_name: ${var.catalog}
+      schema_name: ${resources.schemas.audit_curated.name}
+      name: evidence
+      volume_type: MANAGED
+      comment: Evidence-pack reports written by the evidence_pack job.
+    landing:
+      catalog_name: ${var.catalog}
+      schema_name: ${resources.schemas.raw.name}
+      name: ${var.landing_volume}
+      volume_type: MANAGED
+      comment: Medallion RAW landing zone (mock extracts written by job setup, read by the pipeline with Auto Loader).

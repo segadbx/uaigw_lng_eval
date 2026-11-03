@@ -1,0 +1,192 @@
+# Unity Gateway governance demo for an LNG trading-desk copilot.
+# All data is synthetic. See docs/README.md for prerequisites and run order.
+#
+# Keys in this bundle were checked against `databricks bundle schema` (CLI v1.19.0)
+# on 2026-10-28. model_services / model_provider_services are Beta in bundles and
+# require the direct deployment engine (the CLI default; pinned below).
+
+bundle:
+  name: lngdemo-ai-governance
+  engine: direct
+
+include:
+  - resources/*.yml
+
+# Tagging convention: every tag key starts with `lngdemo_` (see docs/README.md#tagging).
+# presets.tags is applied by the CLI to every resource that supports tags (here: jobs).
+# Resources without a bundle tag field (schemas, volume, model services, app, dashboard,
+# secret scope) and job-created UC objects are tagged by src/notebooks/05_apply_tags.py
+# or carry the prefix in their name/description where no tagging API exists.
+presets:
+  tags:
+    lngdemo_project: lngdemo-ai-governance
+    lngdemo_env: ${bundle.target}
+    lngdemo_owner: ${workspace.current_user.userName}
+    lngdemo_data_class: synthetic
+    lngdemo_managed_by: dab
+
+variables:
+  # ---------- location ----------
+  catalog:
+    description: Catalog that holds the bundle-owned schemas. Must exist before deploy (see README).
+    default: lngdemo_gov
+  warehouse_id:
+    description: Serverless SQL warehouse used by jobs, the dashboard and the app. Resolved by name at deploy time.
+    lookup:
+      warehouse: Serverless Starter Warehouse
+
+  # ---------- models ----------
+  chat_model:
+    description: Pay-per-token foundation model behind trading_copilot (name in system.ai, discovered with `databricks serving-endpoints list`).
+    default: databricks-claude-sonnet-5-5
+  dev_chat_model:
+    description: Cheaper model behind trading_copilot_dev.
+    default: databricks-claude-haiku-5-5
+  judge_model:
+    description: Model behind the LLM-as-a-judge evaluator service.
+    default: databricks-claude-haiku-5-5
+  system_model_service:
+    description: >-
+      System-provided model SERVICE used by M1 to test direct system.ai access. Service names drop the
+      "databricks-" prefix used by routing models (system.ai.claude-haiku-5-5 vs models/system.ai.databricks-claude-haiku-5-5),
+      checked with `databricks ai-gateway list-model-services` on 2026-10-28.
+    default: claude-haiku-5-5
+
+  # ---------- personas (existing account groups; NOT created by this bundle) ----------
+  trader_group:
+    default: lngdemo-trader-pilot
+  unentitled_trader_group:
+    default: lngdemo-trader-unentitled
+  developer_group:
+    default: lngdemo-developers
+  operator_group:
+    default: lngdemo-operators
+  security_group:
+    default: lngdemo-security
+  auditor_group:
+    default: lngdemo-auditors
+
+  # ---------- service principals (application IDs) ----------
+  app_sp_application_id:
+    description: Application ID of the SP the copilot app / batch callers use (granted EXECUTE on trading_copilot). Resolved by display name at deploy time (scripts/create_persona_sps.sh creates it).
+    lookup:
+      service_principal: lngdemo-sp-app
+
+  sp_name_prefix:
+    description: Display-name prefix of the persona service principals (<prefix><persona>, e.g. lngdemo-sp-trader). Used by scripts/*.sh.
+    default: lngdemo-sp-
+
+  # ---------- medallion pipeline (raw -> bronze -> silver -> gold) ----------
+  landing_volume:
+    description: UC volume (in the raw schema) where mock source-system extracts land.
+    default: landing
+
+  # ---------- M9: Lakebase (OLTP) ----------
+  ops_catalog:
+    description: >-
+      Catalog for operational data synced FROM Lakebase (CDF history) and its governed views. Created by the
+      bundle on the metastore root, because Lakebase CDF does not support destination catalogs on default storage,
+      while inference tables (var.catalog) require default storage.
+    default: lngdemo_ops
+  lakebase_project_id:
+    description: Lakebase Autoscaling project ID (cargo-nomination OLTP store).
+    default: lngdemo-trading-ops
+  lakebase_branch:
+    description: Production branch auto-created with the project.
+    default: production
+  lakebase_endpoint:
+    description: Read-write endpoint auto-created on the production branch.
+    default: primary
+  lakebase_dev_branch:
+    description: Developer branch, created by job lakebase AFTER production is seeded (copy-on-write snapshot).
+    default: dev
+  lakebase_dev_endpoint:
+    description: Read-write endpoint created on the developer branch.
+    default: dev-rw
+  lakebase_database:
+    description: Postgres database that holds the app schema.
+    default: databricks_postgres
+  lakebase_pg_schema:
+    description: Postgres schema with the nomination tables (also the CDF source schema).
+    default: trade_ops
+  lakebase_reference_schema:
+    description: Postgres schema that receives synced (Lakehouse -> Lakebase) reference tables.
+    default: reference
+  lakebase_uc_catalog:
+    description: UC catalog that registers the Lakebase database (read-only mirror, serverless only).
+    default: lngdemo_trading_ops
+  # Persona SP application IDs (Postgres OAuth role names), resolved by display name at deploy time.
+  trader_sp_application_id:
+    lookup:
+      service_principal: lngdemo-sp-trader
+  unentitled_trader_sp_application_id:
+    lookup:
+      service_principal: lngdemo-sp-unentitled-trader
+  developer_sp_application_id:
+    lookup:
+      service_principal: lngdemo-sp-developer
+  operator_sp_application_id:
+    lookup:
+      service_principal: lngdemo-sp-operator
+  security_sp_application_id:
+    lookup:
+      service_principal: lngdemo-sp-security
+  auditor_sp_application_id:
+    lookup:
+      service_principal: lngdemo-sp-auditor
+
+  # ---------- M10: Genie agent ----------
+  genie_space_title:
+    description: Title of the job-created Genie space over gold contracts (07_genie_space creates or updates it in place).
+    default: LNG Demo - Governed contract book (Genie)
+  genie_space_id:
+    description: >-
+      Space id printed by setup task genie_space (also in audit_curated.setup_state). Only the app needs it; Genie
+      rejects a space whose table doesn't exist yet, so the space can't be a bundle resource on first deploy.
+      "none" = the app falls back to looking the space up by title (non-empty so the app env entry always has a value).
+    default: none
+
+  # ---------- secrets ----------
+  secret_scope:
+    description: Secret scope holding persona SP OAuth credentials (<persona>_client_id / <persona>_client_secret). Created by this bundle; values are added manually.
+    default: lngdemo_gov
+
+  # ---------- observability ----------
+  traces_experiment:
+    description: MLflow experiment for the app's traces.
+    default: /Shared/lngdemo-trading-copilot-traces
+  admin_group:
+    description: Group that may see every trace-table row (documented row-filter pattern uses the built-in admins group).
+    default: admins
+
+  # ---------- behaviour ----------
+  retention_days:
+    description: Auto-TTL retention applied to log tables.
+    default: "7"
+  judge_runs:
+    description: How many times M5 repeats the same judge-triggering prompt.
+    default: "10"
+  trace_table:
+    description: Optional full name of the unified trace table (catalog.schema.table). Empty = trace-table steps are skipped.
+    default: ""
+  confirm_shared_changes:
+    description: Must be "true" before any job changes system.ai grants, governed tags, warehouse ACLs or the trace table. Jobs print the plan first.
+    default: "false"
+
+targets:
+  # Not `mode: development`: development mode prefixes UC schema names with
+  # dev_<user>_, which would break the copy-paste queries in docs/DEMO_RUNBOOK.md.
+  # Both targets use the same UC names, so deploy only one target per catalog
+  # (or pass --var catalog=<other> for the second one).
+  dev:
+    default: true
+    workspace:
+      profile: FE-SANDBOX-AWS
+
+  # Customer-facing run. Deploy authenticated as the owner SP so it becomes the
+  # definer of the model services (see docs/README.md#ownership).
+  demo:
+    mode: production
+    workspace:
+      profile: FE-SANDBOX-AWS
+      root_path: /Workspace/Users/${workspace.current_user.userName}/.bundle/${bundle.name}/${bundle.target}

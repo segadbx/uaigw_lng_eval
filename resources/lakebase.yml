@@ -1,0 +1,179 @@
+# M9: governing the OLTP store with the same identities and evidence model (Lakebase Autoscaling).
+#
+# Four enforcement layers (docs.databricks.com/aws/en/oltp/projects, checked 2026-11-02):
+#   1. Lakebase project ACL (CAN_USE / CAN_MANAGE)            -> postgres_projects.permissions (below)
+#      Project permissions do NOT grant database access (documented).
+#   2. Postgres roles for Databricks identities (OAuth)        -> postgres_roles (below)
+#      OAuth roles for groups support only workspace-level groups, so each persona SP gets its own role
+#      and is granted a NO_LOGIN "group" role in SQL (membership_roles only accepts DATABRICKS_SUPERUSER).
+#   3. Postgres GRANTs + row-level security by desk           -> src/lakebase/*.sql (job lakebase)
+#   4. Unity Catalog on synced copies and the registered catalog -> job lakebase + postgres_catalogs (below)
+#
+# Data movement:
+#   Lakehouse -> Lakebase: synced table (aggregate-only desk summary), created by job lakebase because its
+#                          source table is produced by the setup job after deploy.
+#   Lakebase -> Lakehouse: Lakebase Change Data Feed (Public Preview, CLI/SDK only) into ${var.ops_catalog}.
+#
+# Keys verified against `databricks bundle schema` (resources.Postgres*, resources.Catalog), CLI 1.19.0.
+
+resources:
+  catalogs:
+    ops:
+      name: ${var.ops_catalog}
+      comment: "LNG demo: operational data synced from Lakebase (CDF history) and governed views. Synthetic data."
+      # No storage_root: lands on the metastore root (non-default storage), which Lakebase CDF requires.
+      properties:
+        lngdemo_project: lngdemo-ai-governance
+        lngdemo_env: ${bundle.target}
+        lngdemo_component: catalog-ops
+        lngdemo_data_class: synthetic
+        lngdemo_managed_by: dab
+      grants:
+        - principal: ${var.trader_group}
+          privileges: [USE_CATALOG]
+        - principal: ${var.unentitled_trader_group}
+          privileges: [USE_CATALOG]
+        - principal: ${var.operator_group}
+          privileges: [USE_CATALOG]
+        - principal: ${var.security_group}
+          privileges: [USE_CATALOG]
+        - principal: ${var.auditor_group}
+          privileges: [USE_CATALOG]
+
+  schemas:
+    ops_cdc:
+      catalog_name: ${resources.catalogs.ops.name}
+      name: lakebase_cdc
+      comment: Lakebase CDF destination (lb_<table>_history, SCD2). No row filters / masks here - CDF stops writing if one is applied.
+      properties:
+        lngdemo_project: lngdemo-ai-governance
+        lngdemo_env: ${bundle.target}
+        lngdemo_component: schema-lakebase-cdc
+        lngdemo_data_class: sensitive_payload
+        lngdemo_managed_by: dab
+      grants:
+        - principal: ${var.security_group}
+          privileges: [USE_SCHEMA, SELECT]
+    ops_curated:
+      catalog_name: ${resources.catalogs.ops.name}
+      name: ops_curated
+      comment: Governed views over the CDF history (desk filter, masked contact, metadata-only ops view).
+      properties:
+        lngdemo_project: lngdemo-ai-governance
+        lngdemo_env: ${bundle.target}
+        lngdemo_component: schema-ops-curated
+        lngdemo_data_class: curated
+        lngdemo_managed_by: dab
+      grants:
+        - principal: ${var.trader_group}
+          privileges: [USE_SCHEMA]
+        - principal: ${var.unentitled_trader_group}
+          privileges: [USE_SCHEMA]
+        - principal: ${var.operator_group}
+          privileges: [USE_SCHEMA]
+        - principal: ${var.security_group}
+          privileges: [USE_SCHEMA, SELECT]
+        - principal: ${var.auditor_group}
+          privileges: [USE_SCHEMA]
+    ops_pipeline:
+      catalog_name: ${resources.catalogs.ops.name}
+      name: pipeline_meta
+      comment: Storage for synced-table pipeline checkpoints and event logs (must be a standard UC catalog).
+      properties:
+        lngdemo_project: lngdemo-ai-governance
+        lngdemo_env: ${bundle.target}
+        lngdemo_component: schema-pipeline-meta
+        lngdemo_data_class: synthetic
+        lngdemo_managed_by: dab
+
+  postgres_projects:
+    trading_ops:
+      project_id: ${var.lakebase_project_id}
+      display_name: "LNG demo - trading ops (synthetic)"
+      pg_version: 17
+      purge_on_delete: true
+      default_endpoint_settings:
+        autoscaling_limit_min_cu: 0.5
+        autoscaling_limit_max_cu: 2
+        suspend_timeout_duration: 300s
+      custom_tags:
+        - {key: lngdemo_project, value: lngdemo-ai-governance}
+        - {key: lngdemo_env, value: "${bundle.target}"}
+        - {key: lngdemo_component, value: lakebase-trading-ops}
+        - {key: lngdemo_data_class, value: synthetic}
+        - {key: lngdemo_managed_by, value: dab}
+      # Layer 1 (platform ACL). Owner and workspace admins keep CAN_MANAGE (documented, not removable).
+      # Auditors get nothing here: they audit through Unity Catalog, never through Postgres.
+      permissions:
+        - group_name: ${var.security_group}
+          level: CAN_MANAGE
+        - group_name: ${var.trader_group}
+          level: CAN_USE
+        - group_name: ${var.unentitled_trader_group}
+          level: CAN_USE
+        - group_name: ${var.operator_group}
+          level: CAN_USE
+        - group_name: ${var.developer_group}
+          level: CAN_USE
+
+  # The developer "dev" branch, its endpoint and the developer's OAuth role are created by job lakebase
+  # (src/notebooks/70_lakebase_setup.py), not here: a branch is a copy-on-write snapshot taken at creation,
+  # so it must be created AFTER the job has built and seeded the production schema.
+
+  # Layer 2: Postgres roles. NO_LOGIN "group" roles carry the privileges; persona SP OAuth roles log in
+  # and are granted the group role by src/lakebase/02_grants.sql (job lakebase).
+  postgres_roles:
+    # ---- group roles (production branch)
+    grp_trader:
+      parent: &prod_branch projects/${resources.postgres_projects.trading_ops.project_id}/branches/${var.lakebase_branch}
+      role_id: grp-trader
+      postgres_role: lngdemo_trader_role
+      auth_method: NO_LOGIN
+    grp_unentitled_trader:
+      parent: *prod_branch
+      role_id: grp-unentitled-trader
+      postgres_role: lngdemo_unentitled_trader_role
+      auth_method: NO_LOGIN
+    grp_operator:
+      parent: *prod_branch
+      role_id: grp-operator
+      postgres_role: lngdemo_operator_role
+      auth_method: NO_LOGIN
+    grp_security:
+      parent: *prod_branch
+      role_id: grp-security
+      postgres_role: lngdemo_security_role
+      auth_method: NO_LOGIN
+    # ---- persona SP OAuth roles (production branch). Developer and auditor deliberately have none here.
+    sp_trader:
+      parent: *prod_branch
+      role_id: sp-trader
+      postgres_role: ${var.trader_sp_application_id}
+      identity_type: SERVICE_PRINCIPAL
+      auth_method: LAKEBASE_OAUTH_V1
+    sp_unentitled_trader:
+      parent: *prod_branch
+      role_id: sp-unentitled-trader
+      postgres_role: ${var.unentitled_trader_sp_application_id}
+      identity_type: SERVICE_PRINCIPAL
+      auth_method: LAKEBASE_OAUTH_V1
+    sp_operator:
+      parent: *prod_branch
+      role_id: sp-operator
+      postgres_role: ${var.operator_sp_application_id}
+      identity_type: SERVICE_PRINCIPAL
+      auth_method: LAKEBASE_OAUTH_V1
+    sp_security:
+      parent: *prod_branch
+      role_id: sp-security
+      postgres_role: ${var.security_sp_application_id}
+      identity_type: SERVICE_PRINCIPAL
+      auth_method: LAKEBASE_OAUTH_V1
+
+  # Layer 4: register the Lakebase database in Unity Catalog (read-only mirror; serverless compute only).
+  # UC grants on it are applied by job lakebase (postgres_catalogs has no grants field).
+  postgres_catalogs:
+    trading_ops_uc:
+      catalog_id: ${var.lakebase_uc_catalog}
+      branch: *prod_branch
+      postgres_database: ${var.lakebase_database}

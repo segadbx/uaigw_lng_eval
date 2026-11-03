@@ -1,0 +1,6 @@
+streamlit>=1.40
+requests
+pandas
+databricks-sdk>=0.157.0
+mlflow-skinny[databricks]>=3.14
+psycopg[binary]>=3.2

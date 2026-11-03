@@ -1,0 +1,36 @@
+# Lakeflow Spark Declarative Pipeline: medallion architecture for the mock contract data.
+#   RAW    -> UC volume ${var.catalog}.raw.<landing_volume> (files written by job setup, task seed_data)
+#   BRONZE -> ${var.catalog}.bronze   (Auto Loader streaming tables, pipeline default schema)
+#   SILVER -> ${var.catalog}.silver   (expectations, Auto CDC SCD1 current state + SCD2 price history)
+#   GOLD   -> ${var.catalog}.trading_data (governed serving layer: contracts with declared row filter +
+#             price masks, desk_book_summary, desk_exposure)
+# Triggered (not continuous), serverless; run as a task of job setup after the governance UDFs exist.
+# Keys verified against `databricks bundle schema` (resources.Pipeline), CLI 1.19.0.
+resources:
+  pipelines:
+    medallion:
+      name: lngdemo-medallion
+      catalog: ${var.catalog}
+      schema: ${resources.schemas.bronze.name}
+      serverless: true
+      continuous: false
+      root_path: ../src/pipelines/medallion
+      libraries:
+        - glob:
+            include: ../src/pipelines/medallion/transformations/**
+      configuration:
+        lngdemo.landing_path: /Volumes/${var.catalog}/${resources.schemas.raw.name}/${resources.volumes.landing.name}
+        lngdemo.catalog: ${var.catalog}
+        lngdemo.silver_schema: ${resources.schemas.silver.name}
+        lngdemo.gold_schema: ${resources.schemas.trading_data.name}
+        lngdemo.desk_filter_fn: ${var.catalog}.${resources.schemas.trading_data.name}.desk_filter
+        lngdemo.mask_text_fn: ${var.catalog}.${resources.schemas.trading_data.name}.mask_price_text
+        lngdemo.mask_num_fn: ${var.catalog}.${resources.schemas.trading_data.name}.mask_price_num
+      tags:
+        lngdemo_component: pipeline-medallion
+        lngdemo_module: M4-M9
+      permissions:
+        - group_name: ${var.security_group}
+          level: CAN_VIEW
+        - group_name: ${var.developer_group}
+          level: CAN_VIEW

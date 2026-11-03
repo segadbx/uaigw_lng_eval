@@ -1,0 +1,122 @@
+# Seed for <catalog>.audit_curated.claim_ledger (mirrors docs/VERIFICATION.md).
+# initial_status reflects documentation review on 2026-10-28; jobs overwrite status
+# with observed results. Talk tracks may only use rows whose status is Confirmed.
+claims:
+  - id: 1
+    claim: Inference table `request` holds the original caller text, not the SDD-redacted text.
+    source: rehearsal inference (open question; not covered by inference-tables docs)
+    test: red_team m2_redacted / m4_sdd_email_phone, then 21_verify_claims searches the payload table for the raw email by request marker.
+    initial_status: Not yet tested
+  - id: 2
+    claim: When an input policy denies a request, the protected service's inference table has no row for it.
+    source: https://docs.databricks.com/aws/en/data-governance/unity-catalog/service-policies/create-service-policy ("blocked input requests may not reach the protected service")
+    test: red_team m2_blocked_input, then 21_verify_claims looks up its marker in trading_copilot_payload.
+    initial_status: Not yet tested
+  - id: 3
+    claim: Blocked calls return HTTP 200 with a top-level `databricks_service_policy` object carrying the reason.
+    source: https://docs.databricks.com/aws/en/data-governance/unity-catalog/service-policies/ (documented; no JSON example published)
+    test: red_team stores http_status and policy_json for every BLOCKED test; 21_verify_claims summarises the payload shape.
+    initial_status: Partially confirmed (documented; payload shape not yet observed)
+  - id: 4
+    claim: Service policies fail closed on evaluation errors, timeouts and missing fields.
+    source: https://docs.databricks.com/aws/en/data-governance/unity-catalog/service-policies/ ("any error during evaluation results in DENY")
+    test: broken_policy_fail_closed attached to trading_copilot_dev, job lngdemo-gov-05-fail-closed.
+    initial_status: Partially confirmed (documented; live test pending)
+  - id: 5
+    claim: Custom service policies support only LANGUAGE SQL and cannot rewrite content; only Sensitive Data Detection redacts.
+    source: https://docs.databricks.com/aws/en/data-governance/unity-catalog/service-policies/create-service-policy (Limitations) and service-policies overview
+    test: Documentation re-check 2026-10-28. Both pages state it. No live test (a non-SQL function cannot be attached).
+    initial_status: Confirmed (documentation, 2026-10-28)
+  - id: 6
+    claim: Service policy attachment is UI-only, and a policy applies to all account users on the service.
+    source: https://docs.databricks.com/aws/en/data-governance/unity-catalog/service-policies/create-service-policy (Limitations; Applied to = All account users)
+    test: Docs re-check plus SDK 0.157.0 / CLI 1.19.0 inspection - no service-policy attach/list method in w.ai_gateway or `databricks ai-gateway`.
+    initial_status: Confirmed (documentation + SDK/CLI inspection, 2026-10-28)
+  - id: 7
+    claim: Auto-TTL works on the auto-created inference table without breaking logging.
+    source: not documented (Auto-TTL docs list managed Delta/Iceberg/streaming tables; inference-tables docs warn that altering the table can stop logging)
+    test: 20_harden_logs runs ALTER TABLE ... DELETE ROWS n DAYS AFTER event_time on each payload table; 21_verify_claims checks new rows still arrive after a fresh request.
+    initial_status: Not yet tested
+  - id: 8
+    claim: ABAC column masks and row filters can be applied to inference and trace tables without breaking delivery.
+    source: https://docs.databricks.com/aws/en/ai-gateway/unified-trace-table (documents the row-filter pattern for the trace table only)
+    test: 20_harden_logs applies a column mask to request/response of the payload table (and the documented row filter to the trace table if configured); 21_verify_claims checks delivery afterwards.
+    initial_status: Partially confirmed (trace-table row filter documented; inference table untested)
+  - id: 9
+    claim: Grant and policy changes take a few minutes to propagate.
+    source: create-service-policy docs ("a minute or two to propagate")
+    test: 30_persona_matrix measures seconds from GRANT/REVOKE EXECUTE on trading_copilot_dev to the first changed outcome; policy propagation measured manually (MANUAL_STEPS P2 check).
+    initial_status: Partially confirmed (documented for policies; not yet measured)
+  - id: 10
+    claim: Model Serving does not use customer inputs/outputs to train models (paid accounts); Foundation Model APIs may retain data up to 30 days for abuse detection.
+    source: https://docs.databricks.com/aws/en/machine-learning/model-serving/ and the Foundation Model APIs data-protection section (link only)
+    test: Documentation only - not testable. Does not extend to Azure OpenAI (Microsoft terms).
+    initial_status: Not testable here (documentation reference)
+  - id: 11
+    claim: The gateway holds provider credentials so no app ever sees a key.
+    source: partly inference. Bundle schema marks credential `plaintext` fields INPUT_ONLY ("never round-trips on reads").
+    test: 21_verify_claims GETs every model provider service visible to the runner and checks no credential value is returned. Rotation of direct provider keys remains a customer action outside Databricks.
+    initial_status: Partially confirmed (schema doc + one existing provider service on an earlier workspace returned api_key_value {} on 2026-10-28; re-check in the demo workspace)
+  - id: 12
+    claim: A regex for prices is fragile; layer it with a judge.
+    source: design opinion
+    test: M5 tests m5_price_in_words / m5_indirect_counterparty. NOTE - policy functions do not support regex at all (LIKE/CONTAINS only).
+    initial_status: Not yet tested (design opinion; demonstrate, don't assert)
+  - id: 13
+    claim: At scale, use ABAC GRANT policies on governed tags.
+    source: https://docs.databricks.com/aws/en/data-governance/unity-catalog/abac/grant-policies (EXECUTE/MANAGE on model services is GA; SQL needs classic DBR 18 LTS+; not shown in SHOW GRANTS)
+    test: Documentation check only; not built in this demo.
+    initial_status: Confirmed (documentation, 2026-10-28) - capability exists; the recommendation itself is design advice
+  - id: 14
+    claim: Retention, ownership and persona recommendations are design recommendations, not product behaviour.
+    source: design recommendation
+    test: Labelled as such in DEMO_RUNBOOK.md.
+    initial_status: Not testable here (design recommendation)
+  # ---------------------------------------------------------------- M9 Lakebase (added 2026-11-02)
+  - id: 15
+    claim: Lakebase project permissions (CAN_USE / CAN_MANAGE) do not grant database access; Postgres roles and GRANTs are a separate layer.
+    source: https://docs.databricks.com/aws/en/oltp/projects/manage-project-permissions ("Project permissions don't grant database access")
+    test: 72_lakebase_matrix - the developer SP has CAN_USE on the project but no Postgres role on production; it tries to log in.
+    initial_status: Partially confirmed (documented; live test pending)
+  - id: 16
+    claim: Postgres row-level security enforces desk entitlement for Databricks service principals logging in with OAuth.
+    source: design (Postgres RLS + Lakebase OAuth roles); OAuth roles for groups support only workspace-level groups (manage-roles docs), so SP roles are mapped into NO_LOGIN group roles
+    test: 72_lakebase_matrix - trader vs unentitled trader read by desk, and insert into another desk (WITH CHECK).
+    initial_status: Not yet tested
+  - id: 17
+    claim: Unity Catalog row filters and column masks are not carried into Lakebase synced tables; only curated data should be synced.
+    source: skill reference (Lakebase synced tables, "FGAC not propagated"); not stated on the pages checked 2026-11-02
+    test: 71_lakebase_sync - SNAPSHOT synced table from the row-filtered, masked contracts table; inspect what lands in Postgres; probe removed afterwards.
+    initial_status: Not yet tested
+  - id: 18
+    claim: Lakebase CDF history tables must not carry UC row filters or column masks (CDF stops writing), so lakehouse-side governance uses views.
+    source: https://docs.databricks.com/aws/en/oltp/projects/lakebase-cdf (row filters / column masks stop CDF)
+    test: Documentation only; the demo applies governance through ops_curated views instead (not testing the breaking path).
+    initial_status: Confirmed (documentation, 2026-11-02)
+  - id: 19
+    claim: Querying the Lakebase database through its registered UC catalog is governed by UC grants, independent of Postgres roles.
+    source: https://docs.databricks.com/aws/en/oltp/projects/register-uc (UC permissions control query access through serverless compute; Postgres roles control direct connections; identity used not stated)
+    test: 72_lakebase_matrix - the auditor (UC SELECT, no Postgres role) and security (both) query the registered catalog; compare rows vs RLS.
+    initial_status: Not yet tested
+  - id: 20
+    claim: Lakebase CDF cannot write to a catalog on default storage, while AI Gateway inference tables need default storage - two catalogs are required.
+    source: lakebase-cdf docs ("Destination catalogs configured with default storage are not supported"); inference-table failure observed in the demo workspace 2026-10-28
+    test: 71_lakebase_sync creates the CDF config into the bundle-created ops catalog (metastore root, non-default storage).
+    initial_status: Partially confirmed (documented + inference-table half observed)
+  # ---------------------------------------------------------------- medallion pipeline (added 2026-11-02)
+  - id: 21
+    claim: On a pipeline-managed gold table, UC row filters and column masks must be declared in the pipeline definition and are enforced for every reader.
+    source: skill reference (Lakeflow pipelines - row filter / column mask on datasets, Public Preview); ALTER TABLE SET ROW FILTER on pipeline datasets not supported
+    test: 01_setup_governance checks DESCRIBE TABLE EXTENDED for desk_filter / mask_price_* on gold contracts (setup_state.contract_protection_mode); persona_matrix read_contracts compares trader vs unentitled trader.
+    initial_status: Not yet tested
+  # ---------------------------------------------------------------- M10 Genie agent (added 2026-11-02)
+  - id: 22
+    claim: A Genie agent answers with the asker's Unity Catalog controls - grants, row filter and column masks give different answers per persona to the same question.
+    source: https://docs.databricks.com/aws/en/genie-agents/set-up ("Data access is always evaluated using each end user's own Unity Catalog permissions"; warehouse uses the author's embedded credentials)
+    test: 31_genie_persona_matrix - 3 questions x 6 persona SPs via the Genie Conversation API against the space created by 07_genie_space.
+    initial_status: Not yet tested
+  - id: 23
+    claim: A tag-bound ABAC column mask applies to a pipeline-managed gold materialized view, evaluated for the reader at query time.
+    source: https://docs.databricks.com/aws/en/data-governance/unity-catalog/abac/requirements (ABAC policies on materialized views and streaming tables)
+    test: 06_contact_pii_abac tags contact_email / contact_phone and creates lngdemo_mask_contact_pii on trading_data; 31_genie_persona_matrix checks the contact question for both traders.
+    initial_status: Partially confirmed (documented; live test pending)

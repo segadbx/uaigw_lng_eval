@@ -1,0 +1,860 @@
+{
+  "datasets": [
+    {
+      "name": "ds_kpi",
+      "displayName": "Gateway KPIs (7d)",
+      "queryLines": [
+        "SELECT count(*) AS requests, count(DISTINCT requester) AS requesters,\n",
+        "  sum(total_tokens) AS tokens, round(percentile(latency_ms, 0.95)) AS p95_latency_ms\n",
+        "FROM system.ai_gateway.usage\n",
+        "WHERE event_time >= current_timestamp() - INTERVAL 7 DAYS AND (request_tags['lngdemo_project'] = 'lngdemo-ai-governance')\n"
+      ]
+    },
+    {
+      "name": "ds_requester",
+      "displayName": "Requests by requester",
+      "queryLines": [
+        "SELECT requester, requester_type, service_name, count(*) AS requests,\n",
+        "  sum(total_tokens) AS tokens, round(avg(latency_ms)) AS avg_latency_ms\n",
+        "FROM system.ai_gateway.usage\n",
+        "WHERE event_time >= current_timestamp() - INTERVAL 7 DAYS AND (request_tags['lngdemo_project'] = 'lngdemo-ai-governance')\n",
+        "GROUP BY ALL ORDER BY requests DESC\n"
+      ]
+    },
+    {
+      "name": "ds_hourly",
+      "displayName": "Requests and latency per hour",
+      "queryLines": [
+        "SELECT date_trunc('HOUR', event_time) AS hour, service_name, count(*) AS requests,\n",
+        "  round(percentile(latency_ms, 0.95)) AS p95_latency_ms\n",
+        "FROM system.ai_gateway.usage\n",
+        "WHERE event_time >= current_timestamp() - INTERVAL 7 DAYS AND (request_tags['lngdemo_project'] = 'lngdemo-ai-governance')\n",
+        "GROUP BY ALL\n"
+      ]
+    },
+    {
+      "name": "ds_tags",
+      "displayName": "Requests by request tags",
+      "queryLines": [
+        "SELECT coalesce(request_tags['lngdemo_desk'], '(no lngdemo_desk tag)') AS desk,\n",
+        "  coalesce(request_tags['lngdemo_use_case'], '(no lngdemo_use_case tag)') AS use_case, count(*) AS requests, sum(total_tokens) AS tokens\n",
+        "FROM system.ai_gateway.usage\n",
+        "WHERE event_time >= current_timestamp() - INTERVAL 7 DAYS AND (request_tags['lngdemo_project'] = 'lngdemo-ai-governance')\n",
+        "GROUP BY ALL ORDER BY requests DESC\n"
+      ]
+    },
+    {
+      "name": "ds_status",
+      "displayName": "HTTP status codes",
+      "queryLines": [
+        "SELECT cast(status_code AS STRING) AS status_code, count(*) AS requests\n",
+        "FROM system.ai_gateway.usage\n",
+        "WHERE event_time >= current_timestamp() - INTERVAL 7 DAYS AND (request_tags['lngdemo_project'] = 'lngdemo-ai-governance')\n",
+        "GROUP BY ALL\n"
+      ]
+    },
+    {
+      "name": "ds_policy",
+      "displayName": "Policy outcomes (red-team runs)",
+      "queryLines": [
+        "SELECT module, outcome, count(*) AS calls\n",
+        "FROM red_team_results GROUP BY ALL\n"
+      ]
+    },
+    {
+      "name": "ds_redteam",
+      "displayName": "Latest red-team result per test",
+      "queryLines": [
+        "SELECT module, test_id, persona, expected, outcome, verdict, http_status, left(policy_json, 160) AS policy\n",
+        "FROM red_team_results\n",
+        "QUALIFY row_number() OVER (PARTITION BY test_id ORDER BY run_ts DESC) = 1\n",
+        "ORDER BY module, test_id\n"
+      ]
+    },
+    {
+      "name": "ds_claims",
+      "displayName": "Claim ledger",
+      "queryLines": [
+        "SELECT claim_id, status, claim, left(observed_result, 200) AS observed, tested_at FROM claim_ledger ORDER BY claim_id\n"
+      ]
+    }
+  ],
+  "pages": [
+    {
+      "name": "usage",
+      "displayName": "Gateway usage",
+      "layout": [
+        {
+          "widget": {
+            "name": "t_intro",
+            "multilineTextboxSpec": {
+              "lines": [
+                "## Unity Gateway usage - trading copilot services\n",
+                "Source: `system.ai_gateway.usage` (last 7 days), filtered to calls tagged `lngdemo_project` (every call from this demo's jobs and app). Requires a system-table grant from an account/metastore admin. This table has **no policy-outcome columns**: policy outcomes are on the *Policies & claims* page (red-team runs)."
+              ]
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 6,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "c_req",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_kpi",
+                  "fields": [
+                    {
+                      "name": "requests",
+                      "expression": "`requests`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "requests",
+                  "displayName": "Requests"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Requests"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 2,
+            "width": 1,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "c_users",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_kpi",
+                  "fields": [
+                    {
+                      "name": "requesters",
+                      "expression": "`requesters`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "requesters",
+                  "displayName": "Distinct requesters"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Distinct requesters"
+              }
+            }
+          },
+          "position": {
+            "x": 1,
+            "y": 2,
+            "width": 1,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "c_tokens",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_kpi",
+                  "fields": [
+                    {
+                      "name": "tokens",
+                      "expression": "`tokens`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "tokens",
+                  "displayName": "Tokens"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Tokens"
+              }
+            }
+          },
+          "position": {
+            "x": 2,
+            "y": 2,
+            "width": 1,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "c_p95",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_kpi",
+                  "fields": [
+                    {
+                      "name": "p95_latency_ms",
+                      "expression": "`p95_latency_ms`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "p95_latency_ms",
+                  "displayName": "p95 latency (ms)"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "p95 latency (ms)"
+              }
+            }
+          },
+          "position": {
+            "x": 3,
+            "y": 2,
+            "width": 1,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "tbl_requester",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_requester",
+                  "fields": [
+                    {
+                      "name": "requester",
+                      "expression": "`requester`"
+                    },
+                    {
+                      "name": "requester_type",
+                      "expression": "`requester_type`"
+                    },
+                    {
+                      "name": "service_name",
+                      "expression": "`service_name`"
+                    },
+                    {
+                      "name": "requests",
+                      "expression": "`requests`"
+                    },
+                    {
+                      "name": "tokens",
+                      "expression": "`tokens`"
+                    },
+                    {
+                      "name": "avg_latency_ms",
+                      "expression": "`avg_latency_ms`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "requester",
+                    "displayName": "requester"
+                  },
+                  {
+                    "fieldName": "requester_type",
+                    "displayName": "requester_type"
+                  },
+                  {
+                    "fieldName": "service_name",
+                    "displayName": "service_name"
+                  },
+                  {
+                    "fieldName": "requests",
+                    "displayName": "requests"
+                  },
+                  {
+                    "fieldName": "tokens",
+                    "displayName": "tokens"
+                  },
+                  {
+                    "fieldName": "avg_latency_ms",
+                    "displayName": "avg_latency_ms"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Requests by requester (attribution)"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 5,
+            "width": 6,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "l_hourly",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_hourly",
+                  "fields": [
+                    {
+                      "name": "hour",
+                      "expression": "`hour`"
+                    },
+                    {
+                      "name": "requests",
+                      "expression": "`requests`"
+                    },
+                    {
+                      "name": "service_name",
+                      "expression": "`service_name`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "line",
+              "encodings": {
+                "x": {
+                  "fieldName": "hour",
+                  "scale": {
+                    "type": "temporal"
+                  },
+                  "displayName": "hour"
+                },
+                "y": {
+                  "fieldName": "requests",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "requests"
+                },
+                "color": {
+                  "fieldName": "service_name",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "service_name"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Requests per hour"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 11,
+            "width": 3,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "l_latency",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_hourly",
+                  "fields": [
+                    {
+                      "name": "hour",
+                      "expression": "`hour`"
+                    },
+                    {
+                      "name": "p95_latency_ms",
+                      "expression": "`p95_latency_ms`"
+                    },
+                    {
+                      "name": "service_name",
+                      "expression": "`service_name`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "line",
+              "encodings": {
+                "x": {
+                  "fieldName": "hour",
+                  "scale": {
+                    "type": "temporal"
+                  },
+                  "displayName": "hour"
+                },
+                "y": {
+                  "fieldName": "p95_latency_ms",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "p95_latency_ms"
+                },
+                "color": {
+                  "fieldName": "service_name",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "service_name"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "p95 latency per hour (ms)"
+              }
+            }
+          },
+          "position": {
+            "x": 3,
+            "y": 11,
+            "width": 3,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "b_tags",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_tags",
+                  "fields": [
+                    {
+                      "name": "desk",
+                      "expression": "`desk`"
+                    },
+                    {
+                      "name": "requests",
+                      "expression": "`requests`"
+                    },
+                    {
+                      "name": "use_case",
+                      "expression": "`use_case`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "desk",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "desk"
+                },
+                "y": {
+                  "fieldName": "requests",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "requests"
+                },
+                "color": {
+                  "fieldName": "use_case",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "use_case"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Requests by request tags (lngdemo_desk / lngdemo_use_case)"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 17,
+            "width": 4,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "b_status",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_status",
+                  "fields": [
+                    {
+                      "name": "status_code",
+                      "expression": "`status_code`"
+                    },
+                    {
+                      "name": "requests",
+                      "expression": "`requests`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "status_code",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "status_code"
+                },
+                "y": {
+                  "fieldName": "requests",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "requests"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "HTTP status codes"
+              }
+            }
+          },
+          "position": {
+            "x": 4,
+            "y": 17,
+            "width": 2,
+            "height": 6
+          }
+        }
+      ],
+      "pageType": "PAGE_TYPE_CANVAS"
+    },
+    {
+      "name": "policies",
+      "displayName": "Policies & claims",
+      "layout": [
+        {
+          "widget": {
+            "name": "t_pol",
+            "multilineTextboxSpec": {
+              "lines": [
+                "## Policy outcomes and claim ledger\n",
+                "From `audit_curated.red_team_results` and `audit_curated.claim_ledger`. Only **Confirmed** claims go into the talk track."
+              ]
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 6,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "b_policy",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_policy",
+                  "fields": [
+                    {
+                      "name": "module",
+                      "expression": "`module`"
+                    },
+                    {
+                      "name": "calls",
+                      "expression": "`calls`"
+                    },
+                    {
+                      "name": "outcome",
+                      "expression": "`outcome`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "module",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "module"
+                },
+                "y": {
+                  "fieldName": "calls",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "calls"
+                },
+                "color": {
+                  "fieldName": "outcome",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "outcome"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Outcomes by module"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 2,
+            "width": 6,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "tbl_redteam",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_redteam",
+                  "fields": [
+                    {
+                      "name": "module",
+                      "expression": "`module`"
+                    },
+                    {
+                      "name": "test_id",
+                      "expression": "`test_id`"
+                    },
+                    {
+                      "name": "persona",
+                      "expression": "`persona`"
+                    },
+                    {
+                      "name": "expected",
+                      "expression": "`expected`"
+                    },
+                    {
+                      "name": "outcome",
+                      "expression": "`outcome`"
+                    },
+                    {
+                      "name": "verdict",
+                      "expression": "`verdict`"
+                    },
+                    {
+                      "name": "http_status",
+                      "expression": "`http_status`"
+                    },
+                    {
+                      "name": "policy",
+                      "expression": "`policy`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "module",
+                    "displayName": "module"
+                  },
+                  {
+                    "fieldName": "test_id",
+                    "displayName": "test_id"
+                  },
+                  {
+                    "fieldName": "persona",
+                    "displayName": "persona"
+                  },
+                  {
+                    "fieldName": "expected",
+                    "displayName": "expected"
+                  },
+                  {
+                    "fieldName": "outcome",
+                    "displayName": "outcome"
+                  },
+                  {
+                    "fieldName": "verdict",
+                    "displayName": "verdict"
+                  },
+                  {
+                    "fieldName": "http_status",
+                    "displayName": "http_status"
+                  },
+                  {
+                    "fieldName": "policy",
+                    "displayName": "policy"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Latest red-team result per test"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 8,
+            "width": 6,
+            "height": 8
+          }
+        },
+        {
+          "widget": {
+            "name": "tbl_claims",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_claims",
+                  "fields": [
+                    {
+                      "name": "claim_id",
+                      "expression": "`claim_id`"
+                    },
+                    {
+                      "name": "status",
+                      "expression": "`status`"
+                    },
+                    {
+                      "name": "claim",
+                      "expression": "`claim`"
+                    },
+                    {
+                      "name": "observed",
+                      "expression": "`observed`"
+                    },
+                    {
+                      "name": "tested_at",
+                      "expression": "`tested_at`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "claim_id",
+                    "displayName": "claim_id"
+                  },
+                  {
+                    "fieldName": "status",
+                    "displayName": "status"
+                  },
+                  {
+                    "fieldName": "claim",
+                    "displayName": "claim"
+                  },
+                  {
+                    "fieldName": "observed",
+                    "displayName": "observed"
+                  },
+                  {
+                    "fieldName": "tested_at",
+                    "displayName": "tested_at"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Claim ledger"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 16,
+            "width": 6,
+            "height": 8
+          }
+        }
+      ],
+      "pageType": "PAGE_TYPE_CANVAS"
+    }
+  ]
+}

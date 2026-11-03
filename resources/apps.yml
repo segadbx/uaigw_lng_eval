@@ -1,0 +1,103 @@
+# M8: governance explorer + trading copilot Databricks App.
+# A dropdown picks one of the persona service principals (docs/IDENTITIES.md); every SQL statement and
+# Unity Gateway call then runs with that SP's OAuth M2M token, so UC grants, row filters and masks are
+# evaluated for that persona. Credentials are the <persona>_client_id / <persona>_client_secret keys in the
+# bundle's secret scope, bound below as app `secret` resources (the app SP gets READ on each key).
+# No user authorization (OBO) is used, so no user_api_scopes.
+#
+# To leave the app out, delete this file (or comment the block) before deploying.
+resources:
+  apps:
+    trading_copilot_app:
+      name: lngdemo-trading-copilot
+      description: "Governance explorer + LNG trading copilot (synthetic data), runs as persona SPs. lngdemo_project=lngdemo-ai-governance lngdemo_component=app-trading-copilot"
+      source_code_path: ../src/app
+      resources:
+        - name: sql-warehouse
+          description: Warehouse for persona SQL probes and the aggregate-only UC function tool.
+          sql_warehouse:
+            id: ${var.warehouse_id}
+            permission: CAN_USE
+        - {name: trader-id, secret: {scope: "${var.secret_scope}", key: trader_client_id, permission: READ}}
+        - {name: trader-secret, secret: {scope: "${var.secret_scope}", key: trader_client_secret, permission: READ}}
+        - {name: unentitled-trader-id, secret: {scope: "${var.secret_scope}", key: unentitled_trader_client_id, permission: READ}}
+        - {name: unentitled-trader-secret, secret: {scope: "${var.secret_scope}", key: unentitled_trader_client_secret, permission: READ}}
+        - {name: developer-id, secret: {scope: "${var.secret_scope}", key: developer_client_id, permission: READ}}
+        - {name: developer-secret, secret: {scope: "${var.secret_scope}", key: developer_client_secret, permission: READ}}
+        - {name: operator-id, secret: {scope: "${var.secret_scope}", key: operator_client_id, permission: READ}}
+        - {name: operator-secret, secret: {scope: "${var.secret_scope}", key: operator_client_secret, permission: READ}}
+        - {name: security-id, secret: {scope: "${var.secret_scope}", key: security_client_id, permission: READ}}
+        - {name: security-secret, secret: {scope: "${var.secret_scope}", key: security_client_secret, permission: READ}}
+        - {name: auditor-id, secret: {scope: "${var.secret_scope}", key: auditor_client_id, permission: READ}}
+        - {name: auditor-secret, secret: {scope: "${var.secret_scope}", key: auditor_client_secret, permission: READ}}
+        - {name: app-id, secret: {scope: "${var.secret_scope}", key: app_client_id, permission: READ}}
+        - {name: app-secret, secret: {scope: "${var.secret_scope}", key: app_client_secret, permission: READ}}
+      config:
+        command: [streamlit, run, app.py]
+        env:
+          - name: MODEL_SERVICE
+            value: ${var.catalog}.${resources.schemas.services.name}.${resources.model_services.trading_copilot.model_service_id}
+          - name: COPILOT_PAYLOAD_TABLE
+            value: ${var.catalog}.${resources.schemas.audit_raw.name}.${resources.model_services.trading_copilot.config.inference_table.table_name_prefix}_payload
+          - name: TOOL_FUNCTION
+            value: ${var.catalog}.${resources.schemas.services.name}.desk_price_summary
+          - name: CATALOG
+            value: ${var.catalog}
+          - name: TRADING_SCHEMA
+            value: ${resources.schemas.trading_data.name}
+          - name: AUDIT_CURATED_SCHEMA
+            value: ${resources.schemas.audit_curated.name}
+          - name: AUDIT_RAW_SCHEMA
+            value: ${resources.schemas.audit_raw.name}
+          - name: BRONZE_SCHEMA
+            value: ${resources.schemas.bronze.name}
+          - name: SILVER_SCHEMA
+            value: ${resources.schemas.silver.name}
+          # M9 Lakebase (names from bundle variables / resource references)
+          - name: LAKEBASE_ENDPOINT
+            value: projects/${resources.postgres_projects.trading_ops.project_id}/branches/${var.lakebase_branch}/endpoints/${var.lakebase_endpoint}
+          - name: LAKEBASE_DATABASE
+            value: ${var.lakebase_database}
+          - name: LAKEBASE_PG_SCHEMA
+            value: ${var.lakebase_pg_schema}
+          - name: LAKEBASE_REFERENCE_SCHEMA
+            value: ${var.lakebase_reference_schema}
+          - name: LAKEBASE_UC_CATALOG
+            value: ${resources.postgres_catalogs.trading_ops_uc.catalog_id}
+          - name: OPS_VIEWS_SCHEMA
+            value: ${resources.catalogs.ops.name}.${resources.schemas.ops_curated.name}
+          - name: OPS_CDC_SCHEMA
+            value: ${resources.catalogs.ops.name}.${resources.schemas.ops_cdc.name}
+          # M10 Genie agent (created by setup task genie_space; pass its id with --var genie_space_id=...)
+          - name: GENIE_SPACE_ID
+            value: ${var.genie_space_id}
+          - name: GENIE_SPACE_TITLE
+            value: ${var.genie_space_title}
+          - name: PERSONA_GROUPS
+            value: "trader=${var.trader_group},unentitled_trader=${var.unentitled_trader_group},developer=${var.developer_group},operator=${var.operator_group},security=${var.security_group},auditor=${var.auditor_group}"
+          - name: DATABRICKS_WAREHOUSE_ID
+            value_from: sql-warehouse
+          - name: MLFLOW_EXPERIMENT_NAME
+            value: ${var.traces_experiment}
+          # Persona SP credentials (<PERSONA>_CLIENT_ID / <PERSONA>_CLIENT_SECRET); a missing pair hides the persona.
+          - {name: TRADER_CLIENT_ID, value_from: trader-id}
+          - {name: TRADER_CLIENT_SECRET, value_from: trader-secret}
+          - {name: UNENTITLED_TRADER_CLIENT_ID, value_from: unentitled-trader-id}
+          - {name: UNENTITLED_TRADER_CLIENT_SECRET, value_from: unentitled-trader-secret}
+          - {name: DEVELOPER_CLIENT_ID, value_from: developer-id}
+          - {name: DEVELOPER_CLIENT_SECRET, value_from: developer-secret}
+          - {name: OPERATOR_CLIENT_ID, value_from: operator-id}
+          - {name: OPERATOR_CLIENT_SECRET, value_from: operator-secret}
+          - {name: SECURITY_CLIENT_ID, value_from: security-id}
+          - {name: SECURITY_CLIENT_SECRET, value_from: security-secret}
+          - {name: AUDITOR_CLIENT_ID, value_from: auditor-id}
+          - {name: AUDITOR_CLIENT_SECRET, value_from: auditor-secret}
+          - {name: APP_CLIENT_ID, value_from: app-id}
+          - {name: APP_CLIENT_SECRET, value_from: app-secret}
+      permissions:
+        - group_name: ${var.trader_group}
+          level: CAN_USE
+        - group_name: ${var.unentitled_trader_group}
+          level: CAN_USE
+        - group_name: ${var.security_group}
+          level: CAN_USE

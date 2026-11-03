@@ -1,0 +1,18 @@
+# M3: governance evidence dashboard.
+# Datasets read system.ai_gateway.usage (needs account admin + metastore admin by
+# default, or an explicit system-table grant) and the red-team results table.
+# Note: system.ai_gateway.usage has no policy-outcome columns (checked against the
+# usage-tracking docs on 2026-10-28); policy outcomes come from red_team_results.
+resources:
+  dashboards:
+    governance_evidence:
+      display_name: "LNG Demo AI Governance - Gateway evidence"
+      file_path: ../src/dashboards/governance_evidence.lvdash.json
+      warehouse_id: ${var.warehouse_id}
+      dataset_catalog: ${var.catalog}
+      dataset_schema: ${resources.schemas.audit_curated.name}
+      permissions:
+        - group_name: ${var.security_group}
+          level: CAN_RUN
+        - group_name: ${var.auditor_group}
+          level: CAN_READ

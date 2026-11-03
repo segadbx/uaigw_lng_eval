@@ -1,0 +1,38 @@
+# OPTIONAL: Azure OpenAI behind a model provider service. Disabled by default.
+#
+# Bundles have no conditional resources, so this is shipped commented out. To enable:
+#   1. Create a Unity Catalog service credential for the Azure OpenAI resource
+#      (preferred over an API key; never put `plaintext` keys in this repo).
+#   2. Uncomment the block, set the base_url / credential / deployment name.
+#   3. Add a destination of type DESTINATION_TYPE_EXTERNAL_FOUNDATION_MODEL to
+#      trading_copilot in model_services.yml that references this provider service.
+#
+# Note: the demo workspace is on AWS. Azure OpenAI data handling
+# follows Microsoft's terms, not the Databricks Model Serving terms (claim 10).
+#
+# Keys verified against `databricks bundle schema` (resources.ModelProviderService):
+# config.provider_type, config.azure_openai.direct.{base_url,service_credential.name},
+# config.targets[].{model,native_api_types}, config.inference_table, grants.
+
+resources: {}
+#  model_provider_services:
+#    azure_openai:
+#      parent: schemas/${var.catalog}.${resources.schemas.services.name}
+#      model_provider_service_id: azure_openai
+#      comment: Azure OpenAI for the trading copilot (optional).
+#      config:
+#        provider_type: EXTERNAL_MODEL_PROVIDER_TYPE_AZURE_OPENAI
+#        azure_openai:
+#          direct:
+#            base_url: https://<your-resource>.openai.azure.com
+#            service_credential:
+#              name: credentials/<uc-service-credential-name>
+#        targets:
+#          - model: <deployment-name>
+#            native_api_types: [openai/v1/chat/completions]
+#        inference_table:
+#          parent: schemas/${var.catalog}.${resources.schemas.audit_raw.name}
+#          table_name_prefix: azure_openai_provider
+#      grants:
+#        - principal: ${var.security_group}
+#          privileges: [MANAGE]

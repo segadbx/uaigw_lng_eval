@@ -1,0 +1,340 @@
+# All jobs run notebook tasks on serverless compute (no cluster spec).
+# Notebooks install their own pip dependencies with %pip.
+# Common parameters are defined on the setup job and reused through a YAML anchor.
+
+resources:
+  jobs:
+    setup:
+      name: lngdemo-gov-01-setup
+      description: Idempotent setup - raw mock extracts, governance UDFs, medallion pipeline (raw/bronze/silver/gold), gold grants + tool function, contact-PII ABAC policy + Genie space, policy functions, system.ai access report, capability probe, tags.
+      tags:
+        lngdemo_component: job-setup
+        lngdemo_module: M1-M4-M10
+      parameters: &common_params
+        - name: catalog
+          default: ${var.catalog}
+        - name: services_schema
+          default: ${resources.schemas.services.name}
+        - name: audit_raw_schema
+          default: ${resources.schemas.audit_raw.name}
+        - name: audit_curated_schema
+          default: ${resources.schemas.audit_curated.name}
+        - name: trading_schema
+          default: ${resources.schemas.trading_data.name}
+        - name: trader_group
+          default: ${var.trader_group}
+        - name: unentitled_trader_group
+          default: ${var.unentitled_trader_group}
+        - name: developer_group
+          default: ${var.developer_group}
+        - name: operator_group
+          default: ${var.operator_group}
+        - name: security_group
+          default: ${var.security_group}
+        - name: auditor_group
+          default: ${var.auditor_group}
+        - name: app_sp_application_id
+          default: ${var.app_sp_application_id}
+        - name: secret_scope
+          default: ${var.secret_scope}
+        - name: retention_days
+          default: ${var.retention_days}
+        - name: trace_table
+          default: ${var.trace_table}
+        - name: confirm_shared_changes
+          default: ${var.confirm_shared_changes}
+        - name: warehouse_id
+          default: ${var.warehouse_id}
+        - name: bundle_files_root
+          default: ${workspace.file_path}
+        - name: bundle_target
+          default: ${bundle.target}
+        - name: copilot_service
+          default: ${var.catalog}.${resources.schemas.services.name}.${resources.model_services.trading_copilot.model_service_id}
+        - name: copilot_dev_service
+          default: ${var.catalog}.${resources.schemas.services.name}.${resources.model_services.trading_copilot_dev.model_service_id}
+        - name: judge_service
+          default: ${var.catalog}.${resources.schemas.services.name}.${resources.model_services.trading_judge.model_service_id}
+        - name: copilot_payload
+          default: ${var.catalog}.${resources.schemas.audit_raw.name}.${resources.model_services.trading_copilot.config.inference_table.table_name_prefix}_payload
+        - name: copilot_dev_payload
+          default: ${var.catalog}.${resources.schemas.audit_raw.name}.${resources.model_services.trading_copilot_dev.config.inference_table.table_name_prefix}_payload
+        - name: judge_payload
+          default: ${var.catalog}.${resources.schemas.audit_raw.name}.${resources.model_services.trading_judge.config.inference_table.table_name_prefix}_payload
+        - name: traces_experiment
+          default: ${var.traces_experiment}
+        - name: admin_group
+          default: ${var.admin_group}
+        - name: raw_schema
+          default: ${resources.schemas.raw.name}
+        - name: landing_volume
+          default: ${resources.volumes.landing.name}
+        - name: bronze_schema
+          default: ${resources.schemas.bronze.name}
+        - name: silver_schema
+          default: ${resources.schemas.silver.name}
+        - name: ops_catalog
+          default: ${resources.catalogs.ops.name}
+        - name: ops_cdc_schema
+          default: ${resources.schemas.ops_cdc.name}
+        - name: ops_curated_schema
+          default: ${resources.schemas.ops_curated.name}
+        - name: ops_pipeline_schema
+          default: ${resources.schemas.ops_pipeline.name}
+        - name: lakebase_project
+          default: ${resources.postgres_projects.trading_ops.project_id}
+        - name: lakebase_branch
+          default: ${var.lakebase_branch}
+        - name: lakebase_endpoint
+          default: ${var.lakebase_endpoint}
+        - name: lakebase_dev_branch
+          default: ${var.lakebase_dev_branch}
+        - name: lakebase_dev_endpoint
+          default: ${var.lakebase_dev_endpoint}
+        - name: lakebase_database
+          default: ${var.lakebase_database}
+        - name: lakebase_pg_schema
+          default: ${var.lakebase_pg_schema}
+        - name: lakebase_reference_schema
+          default: ${var.lakebase_reference_schema}
+        - name: lakebase_uc_catalog
+          default: ${resources.postgres_catalogs.trading_ops_uc.catalog_id}
+        - name: role_trader
+          default: ${resources.postgres_roles.grp_trader.postgres_role}
+        - name: role_unentitled_trader
+          default: ${resources.postgres_roles.grp_unentitled_trader.postgres_role}
+        - name: role_operator
+          default: ${resources.postgres_roles.grp_operator.postgres_role}
+        - name: role_security
+          default: ${resources.postgres_roles.grp_security.postgres_role}
+        - name: trader_sp
+          default: ${var.trader_sp_application_id}
+        - name: unentitled_trader_sp
+          default: ${var.unentitled_trader_sp_application_id}
+        - name: developer_sp
+          default: ${var.developer_sp_application_id}
+        - name: operator_sp
+          default: ${var.operator_sp_application_id}
+        - name: security_sp
+          default: ${var.security_sp_application_id}
+        - name: auditor_sp
+          default: ${var.auditor_sp_application_id}
+        - name: genie_space_title
+          default: ${var.genie_space_title}
+      tasks:
+        # medallion RAW: mock extract files into the landing volume (+ desk_entitlements reference table)
+        - task_key: seed_data
+          notebook_task:
+            notebook_path: ../src/notebooks/00_setup_data.py
+        # UDFs the pipeline's gold row filter / masks reference must exist before the pipeline runs
+        - task_key: governance_prereqs
+          depends_on: [{ task_key: seed_data }]
+          notebook_task:
+            notebook_path: ../src/notebooks/01a_governance_prereqs.py
+        # Lakeflow pipeline: raw -> bronze -> silver -> gold (incremental; no full refresh)
+        - task_key: medallion
+          depends_on: [{ task_key: governance_prereqs }]
+          pipeline_task:
+            pipeline_id: ${resources.pipelines.medallion.id}
+            full_refresh: false
+        - task_key: governance
+          depends_on: [{ task_key: medallion }]
+          notebook_task:
+            notebook_path: ../src/notebooks/01_setup_governance.py
+        # M10: tag-driven (ABAC) contact-PII mask on gold contracts, then the Genie agent over that table
+        - task_key: contact_pii_abac
+          depends_on: [{ task_key: governance }]
+          notebook_task:
+            notebook_path: ../src/notebooks/06_contact_pii_abac.py
+        - task_key: genie_space
+          depends_on: [{ task_key: contact_pii_abac }]
+          notebook_task:
+            notebook_path: ../src/notebooks/07_genie_space.py
+        - task_key: policy_functions
+          depends_on: [{ task_key: governance }]
+          notebook_task:
+            notebook_path: ../src/notebooks/02_setup_policy_functions.py
+        - task_key: system_ai_access
+          depends_on: [{ task_key: policy_functions }]
+          notebook_task:
+            notebook_path: ../src/notebooks/03_system_ai_access.py
+        - task_key: capability_probe
+          depends_on: [{ task_key: system_ai_access }]
+          notebook_task:
+            notebook_path: ../src/notebooks/04_capability_probe.py
+        - task_key: apply_tags
+          depends_on: [{ task_key: capability_probe }]
+          notebook_task:
+            notebook_path: ../src/notebooks/05_apply_tags.py
+
+    red_team:
+      name: lngdemo-gov-02-red-team
+      description: M1/M2/M4/M5 - sends the red-team prompt set to the model services as each persona and records outcomes.
+      tags:
+        lngdemo_component: job-red-team
+        lngdemo_module: M1-M2-M4-M5
+      parameters:
+        - name: catalog
+          default: ${var.catalog}
+        - name: services_schema
+          default: ${resources.schemas.services.name}
+        - name: audit_curated_schema
+          default: ${resources.schemas.audit_curated.name}
+        - name: secret_scope
+          default: ${var.secret_scope}
+        - name: bundle_files_root
+          default: ${workspace.file_path}
+        - name: audit_raw_schema
+          default: ${resources.schemas.audit_raw.name}
+        - name: module_filter
+          default: "all" # e.g. M1,M4
+        - name: judge_runs
+          default: ${var.judge_runs}
+        - name: system_model
+          default: ${var.system_model_service}
+        - name: copilot_service
+          default: ${var.catalog}.${resources.schemas.services.name}.${resources.model_services.trading_copilot.model_service_id}
+        - name: copilot_dev_service
+          default: ${var.catalog}.${resources.schemas.services.name}.${resources.model_services.trading_copilot_dev.model_service_id}
+        - name: judge_service
+          default: ${var.catalog}.${resources.schemas.services.name}.${resources.model_services.trading_judge.model_service_id}
+        - name: copilot_payload
+          default: ${var.catalog}.${resources.schemas.audit_raw.name}.${resources.model_services.trading_copilot.config.inference_table.table_name_prefix}_payload
+        - name: copilot_dev_payload
+          default: ${var.catalog}.${resources.schemas.audit_raw.name}.${resources.model_services.trading_copilot_dev.config.inference_table.table_name_prefix}_payload
+        - name: judge_payload
+          default: ${var.catalog}.${resources.schemas.audit_raw.name}.${resources.model_services.trading_judge.config.inference_table.table_name_prefix}_payload
+        - name: bundle_target
+          default: ${bundle.target}
+      tasks:
+        - task_key: send_prompts
+          notebook_task:
+            notebook_path: ../src/notebooks/10_red_team.py
+        - task_key: judge_repeat
+          depends_on: [{ task_key: send_prompts }]
+          notebook_task:
+            notebook_path: ../src/notebooks/11_judge_repeat.py
+
+    open_questions:
+      name: lngdemo-gov-03-open-questions
+      description: M2/M3 - log-table hardening experiments (grants, ABAC, Auto-TTL, curated copy, trace filter) and claim tests. Run >= 60 min after red_team so inference rows have landed.
+      tags:
+        lngdemo_component: job-open-questions
+        lngdemo_module: M2-M3
+      parameters: *common_params
+      tasks:
+        - task_key: harden_logs
+          notebook_task:
+            notebook_path: ../src/notebooks/20_harden_logs.py
+        - task_key: verify_claims
+          depends_on: [{ task_key: harden_logs }]
+          notebook_task:
+            notebook_path: ../src/notebooks/21_verify_claims.py
+        - task_key: apply_tags
+          depends_on: [{ task_key: harden_logs }]
+          notebook_task:
+            notebook_path: ../src/notebooks/05_apply_tags.py
+
+    persona_matrix:
+      name: lngdemo-gov-04-persona-matrix
+      description: M6 - separation-of-duties matrix using each persona's SP OAuth credentials.
+      tags:
+        lngdemo_component: job-persona-matrix
+        lngdemo_module: M6
+      parameters: *common_params
+      tasks:
+        - task_key: matrix
+          notebook_task:
+            notebook_path: ../src/notebooks/30_persona_matrix.py
+
+    genie_matrix:
+      name: lngdemo-gov-10-genie-matrix
+      description: M10 - asks the Genie agent the same three questions as each persona SP and records rows / masks per persona (RBAC vs ABAC). Run after setup.
+      tags:
+        lngdemo_component: job-genie-matrix
+        lngdemo_module: M10
+      parameters: *common_params
+      tasks:
+        - task_key: genie_matrix
+          notebook_task:
+            notebook_path: ../src/notebooks/31_genie_persona_matrix.py
+
+    fail_closed_check:
+      name: lngdemo-gov-05-fail-closed
+      description: M7 - after manually attaching the broken policy to trading_copilot_dev, shows what the caller receives.
+      tags:
+        lngdemo_component: job-fail-closed
+        lngdemo_module: M7
+      parameters: *common_params
+      tasks:
+        - task_key: fail_closed
+          notebook_task:
+            notebook_path: ../src/notebooks/40_fail_closed.py
+
+    acceptance_tests:
+      name: lngdemo-gov-06-acceptance-tests
+      description: M8 - the six MVP acceptance tests with pass/fail output.
+      tags:
+        lngdemo_component: job-acceptance-tests
+        lngdemo_module: M8
+      parameters: *common_params
+      tasks:
+        - task_key: acceptance
+          notebook_task:
+            notebook_path: ../src/notebooks/50_acceptance_tests.py
+
+    evidence_pack:
+      name: lngdemo-gov-07-evidence-pack
+      description: M7 - writes a Markdown evidence report to the evidence volume.
+      tags:
+        lngdemo_component: job-evidence-pack
+        lngdemo_module: M7
+      parameters: *common_params
+      tasks:
+        - task_key: evidence
+          notebook_task:
+            notebook_path: ../src/notebooks/60_evidence_pack.py
+
+    teardown:
+      name: lngdemo-gov-99-teardown
+      description: Removes objects the jobs created inside bundle schemas (tables, functions, ABAC policies, inference tables) and the Genie space and prints manual cleanup. Follow with `databricks bundle destroy`.
+      tags:
+        lngdemo_component: job-teardown
+        lngdemo_module: all
+      parameters: *common_params
+      tasks:
+        - task_key: teardown
+          notebook_task:
+            notebook_path: ../src/notebooks/90_teardown.py
+
+    lakebase:
+      name: lngdemo-gov-08-lakebase
+      description: M9 - Lakebase OLTP store - schema, RLS, roles, dev branch, UC grants; then synced table (Lakehouse->Lakebase), FGAC probe and Lakebase CDF (Lakebase->Lakehouse). Run after setup.
+      tags:
+        lngdemo_component: job-lakebase
+        lngdemo_module: M9
+      parameters: *common_params
+      tasks:
+        - task_key: lb_setup
+          notebook_task:
+            notebook_path: ../src/notebooks/70_lakebase_setup.py
+        - task_key: lb_sync
+          depends_on: [{ task_key: lb_setup }]
+          notebook_task:
+            notebook_path: ../src/notebooks/71_lakebase_sync.py
+        - task_key: apply_tags
+          depends_on: [{ task_key: lb_sync }]
+          notebook_task:
+            notebook_path: ../src/notebooks/05_apply_tags.py
+
+    lakebase_matrix:
+      name: lngdemo-gov-09-lakebase-matrix
+      description: M9 - governed UC views over the Lakebase CDF history, then the persona matrix across project ACL, Postgres roles/RLS, dev branch and Unity Catalog. Re-run any time (CDF history can lag).
+      tags:
+        lngdemo_component: job-lakebase-matrix
+        lngdemo_module: M9
+      parameters: *common_params
+      tasks:
+        - task_key: lb_matrix
+          notebook_task:
+            notebook_path: ../src/notebooks/72_lakebase_matrix.py
